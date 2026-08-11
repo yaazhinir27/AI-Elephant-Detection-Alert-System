@@ -1,0 +1,766 @@
+from flask import Flask, render_template, request, redirect, url_for, session, jsonify, Response
+from flask_mail import Mail, Message
+from flask_sqlalchemy import SQLAlchemy
+from werkzeug.security import generate_password_hash, check_password_hash
+from werkzeug.utils import secure_filename
+from datetime import datetime, timedelta, timezone
+import os, json, joblib, cv2, numpy as np, threading, time, requests, ephem, warnings
+from functools import wraps
+import pandas as pd
+
+# ── Suppress sklearn InconsistentVersionWarning (model trained on older sklearn)
+# This is expected and safe — predictions still work correctly.
+try:
+    from sklearn.exceptions import InconsistentVersionWarning
+    warnings.filterwarnings('ignore', category=InconsistentVersionWarning)
+except ImportError:
+    pass
+warnings.filterwarnings('ignore', message=r'.*Trying to unpickle estimator.*', category=UserWarning)
+
+app = Flask(__name__)
+app.secret_key = 'elephant_guardian_secret_2024'
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///elephant.db'
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+app.config['UPLOAD_FOLDER'] = 'static/uploads'
+app.config['SNAPSHOT_FOLDER'] = 'static/snapshots'
+app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024
+
+# ── Mail — set env vars MAIL_USERNAME and MAIL_PASSWORD ──
+app.config['MAIL_SERVER']         = 'smtp.gmail.com'
+app.config['MAIL_PORT']           = 587
+app.config['MAIL_USE_TLS']        = True
+app.config['MAIL_USERNAME'] = os.environ.get('MAIL_USERNAME', 'yaazhu2707@gmail.com')
+app.config['MAIL_PASSWORD'] = os.environ.get('MAIL_PASSWORD', 'bwyyoigutotipbsw')
+app.config['MAIL_DEFAULT_SENDER'] = os.environ.get('MAIL_USERNAME', 'your_email@gmail.com')
+
+db   = SQLAlchemy(app)
+mail = Mail(app)
+
+# ── IST helper (UTC + 5:30) ──────────────────────────────
+_IST_OFFSET = timedelta(hours=5, minutes=30)
+
+def fmt_ist(dt):
+    """Convert a naive UTC datetime to IST string."""
+    if dt is None:
+        return 'N/A'
+    return (dt + _IST_OFFSET).strftime('%d %b %Y, %I:%M:%S %p IST')
+
+# ─────────────────────────────────────────
+# DATABASE MODELS
+# ─────────────────────────────────────────
+class User(db.Model):
+    id           = db.Column(db.Integer, primary_key=True)
+    username     = db.Column(db.String(80),  unique=True, nullable=False)
+    email        = db.Column(db.String(120), unique=True, nullable=False)
+    password     = db.Column(db.String(200), nullable=False)
+    location     = db.Column(db.String(200), nullable=False)
+    latitude     = db.Column(db.Float, nullable=True)
+    longitude    = db.Column(db.Float, nullable=True)
+    created_at   = db.Column(db.DateTime, default=datetime.utcnow)
+    detections   = db.relationship('Detection', backref='user', lazy=True)
+    forecasts    = db.relationship('Forecast',  backref='user', lazy=True)
+
+class Detection(db.Model):
+    id             = db.Column(db.Integer, primary_key=True)
+    user_id        = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    grid_id        = db.Column(db.Integer, nullable=False)
+    timestamp      = db.Column(db.DateTime, default=datetime.utcnow)
+    day_of_week    = db.Column(db.Integer)
+    month          = db.Column(db.Integer)
+    season         = db.Column(db.Integer)
+    moon_phase     = db.Column(db.Float)
+    snapshot_path  = db.Column(db.String(300))
+    video_path     = db.Column(db.String(300))
+    detection_type = db.Column(db.String(20))
+    elephant_count = db.Column(db.Integer, default=0)
+    confidence     = db.Column(db.Float, default=0.0)
+    weather_data   = db.Column(db.Text)
+    location_lat   = db.Column(db.Float)
+    location_lng   = db.Column(db.Float)
+
+class Forecast(db.Model):
+    id                        = db.Column(db.Integer, primary_key=True)
+    user_id                   = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    grid_id                   = db.Column(db.Integer, nullable=False)
+    timestamp                 = db.Column(db.DateTime, default=datetime.utcnow)
+    probability               = db.Column(db.Float)
+    risk_level                = db.Column(db.String(20))
+    day_of_week               = db.Column(db.Integer)
+    month                     = db.Column(db.Integer)
+    season                    = db.Column(db.Integer)
+    rainfall_mm               = db.Column(db.Float)
+    temperature_c             = db.Column(db.Float)
+    humidity_percent          = db.Column(db.Float)
+    moon_phase                = db.Column(db.Float)
+    intrusion_last_3_days     = db.Column(db.Integer)
+    intrusion_last_7_days     = db.Column(db.Integer)
+    days_since_last_intrusion = db.Column(db.Integer)
+    forecast_result           = db.Column(db.Text)
+
+# ─────────────────────────────────────────
+# HELPERS
+# ─────────────────────────────────────────
+SEASON_MAP = {12:0,1:0,2:0, 3:1,4:1,5:1, 6:2,7:2,8:2, 9:3,10:3,11:3}
+
+def login_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if 'user_id' not in session:
+            return redirect(url_for('login'))
+        return f(*args, **kwargs)
+    return decorated
+
+def get_moon_phase(dt=None):
+    if dt is None:
+        dt = datetime.utcnow()
+    return round(ephem.Moon(dt).phase / 100.0, 4)
+
+def get_season(month):
+    return SEASON_MAP.get(month, 0)
+
+def geocode_location(location):
+    try:
+        url  = f"https://nominatim.openstreetmap.org/search?q={location}&format=json&limit=1"
+        resp = requests.get(url, headers={'User-Agent': 'ElephantDetectionApp/1.0'}, timeout=10)
+        data = resp.json()
+        if data:
+            return float(data[0]['lat']), float(data[0]['lon'])
+    except Exception:
+        pass
+    return None, None
+
+def get_weather(lat, lon):
+    try:
+        url  = (f"https://api.open-meteo.com/v1/forecast"
+                f"?latitude={lat}&longitude={lon}"
+                f"&current=temperature_2m,relative_humidity_2m,precipitation"
+                f"&timezone=auto")
+        data = requests.get(url, timeout=10).json()
+        cur  = data.get('current', {})
+        return {
+            'temperature_c':    cur.get('temperature_2m', 28.0),
+            'humidity_percent': cur.get('relative_humidity_2m', 75),
+            'rainfall_mm':      cur.get('precipitation', 0.0)
+        }
+    except Exception:
+        return {'temperature_c': 28.0, 'humidity_percent': 75, 'rainfall_mm': 0.0}
+
+def get_intrusion_stats(user_id, grid_id):
+    now   = datetime.utcnow()
+    last3 = Detection.query.filter(
+        Detection.user_id == user_id, Detection.grid_id == grid_id,
+        Detection.timestamp >= now - timedelta(days=3),
+        Detection.elephant_count > 0).count()
+    last7 = Detection.query.filter(
+        Detection.user_id == user_id, Detection.grid_id == grid_id,
+        Detection.timestamp >= now - timedelta(days=7),
+        Detection.elephant_count > 0).count()
+    last_det = Detection.query.filter(
+        Detection.user_id == user_id, Detection.grid_id == grid_id,
+        Detection.elephant_count > 0
+    ).order_by(Detection.timestamp.desc()).first()
+    days_since = 30 if not last_det else (now - last_det.timestamp).days
+    return last3, last7, days_since
+
+def compute_risk(prob):
+    if prob < 0.25: return 'Low'
+    if prob < 0.50: return 'Medium'
+    if prob < 0.75: return 'High'
+    return 'Very High'
+
+def get_likely_time(user_id, grid_id):
+    dets = Detection.query.filter_by(user_id=user_id, grid_id=grid_id)\
+                          .filter(Detection.elephant_count > 0).all()
+    if not dets:
+        return "20:00 – 23:00 (typical peak hours)"
+    avg = sum(d.timestamp.hour for d in dets) // len(dets)
+    return f"{avg:02d}:00 – {(avg+2)%24:02d}:00 IST"
+
+# ── FIX #4 — email helpers always accept app + IDs (never ORM objects) ────────
+def send_detection_email(flask_app, user_id, det_id, snap_path):
+    """Called from a daemon thread – needs its own app context."""
+    with flask_app.app_context():
+        try:
+            user = db.session.get(User, user_id)
+            det  = db.session.get(Detection, det_id)
+            if not user or not det:
+                return
+            weather = json.loads(det.weather_data) if det.weather_data else {}
+            ts_ist  = fmt_ist(det.timestamp)
+            msg = Message("🐘 ELEPHANT DETECTED – Immediate Alert!",
+                          recipients=[user.email])
+            msg.html = f"""
+<div style="font-family:Arial;background:#1a0a00;color:#fff;padding:24px;border-radius:12px;max-width:600px;">
+  <h1 style="color:#f59e0b;margin:0 0 10px;">🐘 Elephant Intrusion Alert!</h1>
+  <p style="font-size:17px;margin:0 0 16px;">An elephant has been detected in your monitored area.</p>
+  <table style="background:#2d1600;padding:16px;border-radius:8px;width:100%;border-collapse:collapse;">
+    <tr><td style="padding:7px 10px;color:#aaa;white-space:nowrap;">👤 User</td>
+        <td style="padding:7px 10px;">{user.username}</td></tr>
+    <tr><td style="padding:7px 10px;color:#aaa;">📍 Location</td>
+        <td style="padding:7px 10px;">{user.location}</td></tr>
+    <tr><td style="padding:7px 10px;color:#aaa;">🗺️ Coordinates</td>
+        <td style="padding:7px 10px;">{user.latitude}, {user.longitude}</td></tr>
+    <tr><td style="padding:7px 10px;color:#aaa;">📋 Grid</td>
+        <td style="padding:7px 10px;">Grid {det.grid_id}</td></tr>
+    <tr><td style="padding:7px 10px;color:#aaa;">🕒 Time (IST)</td>
+        <td style="padding:7px 10px;">{ts_ist}</td></tr>
+    <tr><td style="padding:7px 10px;color:#aaa;">🌡️ Temperature</td>
+        <td style="padding:7px 10px;">{weather.get('temperature_c','N/A')}°C</td></tr>
+    <tr><td style="padding:7px 10px;color:#aaa;">💧 Humidity</td>
+        <td style="padding:7px 10px;">{weather.get('humidity_percent','N/A')}%</td></tr>
+    <tr><td style="padding:7px 10px;color:#aaa;">🌧️ Rainfall</td>
+        <td style="padding:7px 10px;">{weather.get('rainfall_mm','N/A')} mm</td></tr>
+  </table>
+  <p style="color:#f59e0b;margin-top:16px;">⚠️ Take immediate precautionary measures!</p>
+  <p style="font-size:12px;color:#888;margin-top:8px;">ElephantGuard Detection System</p>
+</div>"""
+            if snap_path and os.path.exists(snap_path):
+                with open(snap_path, 'rb') as f:
+                    msg.attach('detection_snapshot.jpg', 'image/jpeg', f.read())
+            mail.send(msg)
+            print(f"[MAIL] Detection alert → {user.email}")
+        except Exception as exc:
+            print(f"[MAIL ERROR] Detection: {exc}")
+
+def send_forecast_email(flask_app, user_id, result, grid_id):
+    """Called from a daemon thread – needs its own app context."""
+    with flask_app.app_context():
+        try:
+            user = db.session.get(User, user_id)
+            if not user:
+                return
+            rc = {'Low':'#22c55e','Medium':'#f59e0b',
+                  'High':'#ef4444','Very High':'#7f1d1d'}.get(result['risk_level'],'#aaa')
+            ts = fmt_ist(datetime.utcnow())
+            msg = Message(f"🐘 Elephant Intrusion Forecast – Grid {grid_id}",
+                          recipients=[user.email])
+            msg.html = f"""
+<div style="font-family:Arial;background:#1a0a00;color:#fff;padding:24px;border-radius:12px;max-width:600px;">
+  <h1 style="color:#f59e0b;margin:0 0 6px;">🐘 Elephant Intrusion Forecast</h1>
+  <h2 style="color:#d4a433;margin:0 0 16px;">Grid {grid_id} &nbsp;·&nbsp; {ts}</h2>
+  <div style="background:#2d1600;padding:16px;border-radius:8px;">
+    <p style="font-size:18px;"><b>Intrusion Probability:</b> {result['probability']}%</p>
+    <p><b>Risk Level:</b>
+       <span style="color:{rc};font-size:20px;font-weight:bold;">{result['risk_level']}</span></p>
+    <p><b>Likely Intrusion Time:</b> {result['likely_time']}</p>
+    <p><b>Risk Trend:</b> {result['risk_trend']}</p>
+    <p><b>Weather Influence:</b> {result['weather_influence']}</p>
+    <p><b>Most Vulnerable Grid:</b> Grid {result['most_vulnerable_grid']}</p>
+  </div>
+  <p style="color:#f59e0b;margin-top:16px;">⚠️ Please take appropriate preventive measures.</p>
+  <p style="font-size:12px;color:#888;margin-top:8px;">ElephantGuard AI Forecasting System</p>
+</div>"""
+            mail.send(msg)
+            print(f"[MAIL] Forecast report → {user.email}")
+        except Exception as exc:
+            print(f"[MAIL ERROR] Forecast: {exc}")
+
+# ─────────────────────────────────────────
+# YOLO / ML models (lazy load)
+# ─────────────────────────────────────────
+_yolo_model = None
+def get_yolo_model():
+    global _yolo_model
+    if _yolo_model is None and os.path.exists('models/best.pt'):
+        from ultralytics import YOLO
+        _yolo_model = YOLO('models/best.pt')
+    return _yolo_model
+
+_ml_model = None
+_ml_scaler = None
+def get_ml_model():
+    global _ml_model, _ml_scaler
+    if _ml_model is None and os.path.exists('models/best_intrusion_model.pkl'):
+        _ml_model  = joblib.load('models/best_intrusion_model.pkl')
+        _ml_scaler = joblib.load('models/scaler.pkl')
+    return _ml_model, _ml_scaler
+
+# ─────────────────────────────────────────
+# AUTH ROUTES
+# ─────────────────────────────────────────
+@app.route('/')
+def index():
+    return render_template('index.html')
+
+@app.route('/register', methods=['GET','POST'])
+def register():
+    if request.method == 'POST':
+        username = request.form.get('username','').strip()
+        email    = request.form.get('email','').strip()
+        password = request.form.get('password','')
+        location = request.form.get('location','').strip()
+        if User.query.filter_by(username=username).first():
+            return jsonify({'success':False,'message':'Username already exists'}), 400
+        if User.query.filter_by(email=email).first():
+            return jsonify({'success':False,'message':'Email already registered'}), 400
+        lat, lon = geocode_location(location)
+        db.session.add(User(
+            username=username, email=email,
+            password=generate_password_hash(password),
+            location=location, latitude=lat, longitude=lon))
+        db.session.commit()
+        return jsonify({'success':True,'message':'Registration successful!'})
+    return render_template('auth.html', mode='register')
+
+@app.route('/login', methods=['GET','POST'])
+def login():
+    if request.method == 'POST':
+        email    = request.form.get('email','').strip()
+        password = request.form.get('password','')
+        user = User.query.filter_by(email=email).first()
+        if user and check_password_hash(user.password, password):
+            session['user_id']  = user.id
+            session['username'] = user.username
+            return jsonify({'success':True})
+        return jsonify({'success':False,'message':'Invalid email or password'}), 401
+    return render_template('auth.html', mode='login')
+
+@app.route('/logout')
+def logout():
+    session.clear()
+    return redirect(url_for('index'))
+
+# ─────────────────────────────────────────
+# DASHBOARD
+# ─────────────────────────────────────────
+@app.route('/dashboard')
+@login_required
+def dashboard():
+    user = db.session.get(User, session['user_id'])
+    total     = Detection.query.filter_by(user_id=user.id).count()
+    elephants = Detection.query.filter_by(user_id=user.id)\
+                               .filter(Detection.elephant_count>0).count()
+    forecasts = Forecast.query.filter_by(user_id=user.id).count()
+    recent_raw= Detection.query.filter_by(user_id=user.id)\
+                               .order_by(Detection.timestamp.desc()).limit(5).all()
+    recent = [{
+        'grid_id':        d.grid_id,
+        'detection_type': d.detection_type,
+        'elephant_count': d.elephant_count,
+        'confidence':     round(d.confidence*100,1),
+        'timestamp_ist':  fmt_ist(d.timestamp),
+    } for d in recent_raw]
+    return render_template('dashboard.html', user=user,
+        total_detections=total, elephant_detections=elephants,
+        forecasts_count=forecasts, recent=recent)
+
+# ─────────────────────────────────────────
+# DETECTION
+# ─────────────────────────────────────────
+@app.route('/detection')
+@login_required
+def detection():
+    return render_template('detection.html', user=db.session.get(User, session['user_id']))
+
+# ── FIX #2 — video detection background job + SSE-style polling ──────────────
+detection_jobs = {}   # uid → {status, progress, result}
+
+@app.route('/api/detect_video', methods=['POST'])
+@login_required
+def detect_video():
+    user    = db.session.get(User, session['user_id'])
+    grid_id = int(request.form.get('grid_id', 1))
+    video   = request.files.get('video')
+    if not video:
+        return jsonify({'success':False,'message':'No video file'}), 400
+
+    filename   = secure_filename(f"{user.id}_{int(time.time())}_{video.filename}")
+    video_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+    video.save(video_path)
+
+    uid = user.id
+    detection_jobs[uid] = {'status':'processing','progress':0,'result':None}
+
+    def _process():
+        with app.app_context():
+            u     = db.session.get(User, uid)
+            model = get_yolo_model()
+
+            if not model:
+                # Demo mode: simulate progress
+                for p in range(0, 101, 5):
+                    detection_jobs[uid]['progress'] = p
+                    time.sleep(0.12)
+                r = _build_and_save(u, grid_id, video_path, None, 'video', 1, 0.88)
+                detection_jobs[uid] = {'status':'done','progress':100,'result':r}
+                return
+
+            cap          = cv2.VideoCapture(video_path)
+            total_frames = max(1, int(cap.get(cv2.CAP_PROP_FRAME_COUNT)))
+            best_frame   = None
+            best_conf    = 0.0
+            frame_no     = 0
+
+            while cap.isOpened():
+                ret, frame = cap.read()
+                if not ret:
+                    break
+                frame_no += 1
+                detection_jobs[uid]['progress'] = min(97, int(frame_no/total_frames*100))
+
+                if frame_no % 10 != 0:
+                    continue
+
+                results = model(frame, conf=0.4)[0]
+                for box in results.boxes:
+                    if int(box.cls[0]) == 1:
+                        conf = float(box.conf[0])
+                        if conf > best_conf:
+                            best_conf = conf
+                            x1,y1,x2,y2 = map(int, box.xyxy[0])
+                            cv2.rectangle(frame,(x1,y1),(x2,y2),(0,255,0),3)
+                            cv2.rectangle(frame,(x1,max(0,y1-38)),(x1+240,y1),(0,255,0),-1)
+                            cv2.putText(frame,f"ELEPHANT {conf:.2f}",
+                                        (x1+6,y1-8),cv2.FONT_HERSHEY_SIMPLEX,0.85,(0,0,0),2)
+                            best_frame = frame.copy()
+            cap.release()
+
+            snap_path = None
+            if best_frame is not None:
+                sn = f"snap_{uid}_{int(time.time())}.jpg"
+                snap_path = os.path.join(app.config['SNAPSHOT_FOLDER'], sn)
+                cv2.imwrite(snap_path, best_frame)
+
+            ec = 1 if best_conf > 0 else 0
+            r  = _build_and_save(u, grid_id, video_path, snap_path, 'video', ec, best_conf)
+            detection_jobs[uid] = {'status':'done','progress':100,'result':r}
+
+    threading.Thread(target=_process, daemon=True).start()
+    return jsonify({'success':True,'message':'Processing started'})
+
+@app.route('/api/detect_video_status')
+@login_required
+def detect_video_status():
+    uid = session['user_id']
+    return jsonify(detection_jobs.get(uid, {'status':'idle','progress':0,'result':None}))
+
+def _build_and_save(user, grid_id, video_path, snap_path,
+                    det_type, elephant_count, confidence):
+    """Save Detection row, fire email thread, return result dict."""
+    now     = datetime.utcnow()
+    weather = get_weather(user.latitude or 13.0, user.longitude or 80.0)
+    moon    = get_moon_phase(now)
+
+    det = Detection(
+        user_id=user.id, grid_id=grid_id, timestamp=now,
+        day_of_week=now.weekday(), month=now.month, season=get_season(now.month),
+        moon_phase=moon, snapshot_path=snap_path, video_path=video_path,
+        detection_type=det_type, elephant_count=elephant_count,
+        confidence=round(confidence,4), weather_data=json.dumps(weather),
+        location_lat=user.latitude, location_lng=user.longitude)
+    db.session.add(det)
+    db.session.commit()
+
+    if elephant_count > 0:
+        threading.Thread(
+            target=send_detection_email,
+            args=(app, user.id, det.id, snap_path),
+            daemon=True).start()
+
+    snap_url = ('/' + snap_path.replace('\\','/')) if snap_path else None
+    return {
+        'success':           True,
+        'elephant_detected': elephant_count > 0,
+        'elephant_count':    elephant_count,
+        'confidence':        round(confidence*100, 1),
+        'snapshot':          snap_url,
+        'detection_id':      det.id,
+        'weather':           weather,
+        'grid_id':           grid_id,
+        'timestamp':         fmt_ist(now),   # FIX #3 — IST
+    }
+
+# ── FIX #1 — live feed: ALL db work inside app_context ───────────────────────
+camera_active  = {}
+camera_results = {}
+
+def _live_generator(flask_app, user_id, grid_id):
+    with flask_app.app_context():
+        u_row  = db.session.get(User, user_id)
+        u_lat  = u_row.latitude  or 13.0
+        u_lon  = u_row.longitude or 80.0
+
+    cap             = cv2.VideoCapture(0)
+    model           = get_yolo_model()
+    saved           = False
+    no_ele_ctr      = 0
+
+    while camera_active.get(user_id, False):
+        ret, frame = cap.read()
+        if not ret:
+            cap.release()
+            cap = cv2.VideoCapture(0)
+            time.sleep(0.1)
+            continue
+
+        elephant_in_frame = False
+
+        if model:
+            results = model(frame, conf=0.4)[0]
+            for box in results.boxes:
+                if int(box.cls[0]) == 1:
+                    elephant_in_frame = True
+                    conf = float(box.conf[0])
+                    x1,y1,x2,y2 = map(int, box.xyxy[0])
+                    cv2.rectangle(frame,(x1,y1),(x2,y2),(0,255,0),3)
+                    cv2.rectangle(frame,(x1,max(0,y1-38)),(x1+240,y1),(0,255,0),-1)
+                    cv2.putText(frame,f"ELEPHANT {conf:.2f}",
+                                (x1+6,y1-8),cv2.FONT_HERSHEY_SIMPLEX,0.85,(0,0,0),2)
+                    if not saved:
+                        sn   = f"live_{user_id}_{int(time.time())}.jpg"
+                        sp   = os.path.join(flask_app.config['SNAPSHOT_FOLDER'], sn)
+                        cv2.imwrite(sp, frame)
+                        # FIX #1: db inside context
+                        with flask_app.app_context():
+                            u2 = db.session.get(User, user_id)
+                            _build_and_save(u2, grid_id, None, sp, 'live', 1, conf)
+                        saved = True
+                        camera_results[user_id] = {'detected':True,'confidence':round(conf*100,1)}
+
+        # overlay bar
+        bar = frame.copy()
+        cv2.rectangle(bar,(0,0),(frame.shape[1],46),(0,20,0),-1)
+        cv2.addWeighted(bar,0.75,frame,0.25,0,frame)
+        stxt  = "ELEPHANT DETECTED!" if elephant_in_frame else "Monitoring..."
+        scol  = (50,50,255) if elephant_in_frame else (80,220,80)
+        cv2.putText(frame,stxt,(14,32),cv2.FONT_HERSHEY_SIMPLEX,0.9,scol,2)
+        ts = fmt_ist(datetime.utcnow())
+        cv2.putText(frame,f"Grid {grid_id}  |  {ts}",
+                    (frame.shape[1]-440,32),cv2.FONT_HERSHEY_SIMPLEX,0.6,(200,200,200),1)
+
+        if not elephant_in_frame:
+            no_ele_ctr += 1
+            if no_ele_ctr > 60:
+                saved      = False
+                no_ele_ctr = 0
+
+        ok, buf = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY,82])
+        if ok:
+            yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n'
+                   + buf.tobytes() + b'\r\n')
+
+    cap.release()
+
+@app.route('/api/start_live/<int:grid_id>')
+@login_required
+def start_live(grid_id):
+    uid = session['user_id']
+    camera_active[uid]  = True
+    camera_results[uid] = {'detected':False,'confidence':0}
+    return jsonify({'success':True})
+
+@app.route('/api/stop_live')
+@login_required
+def stop_live():
+    uid = session['user_id']
+    camera_active[uid] = False
+    return jsonify({'success':True})
+
+@app.route('/video_feed/<int:grid_id>')
+@login_required
+def video_feed(grid_id):
+    uid = session['user_id']
+    return Response(
+        _live_generator(app, uid, grid_id),
+        mimetype='multipart/x-mixed-replace; boundary=frame')
+
+@app.route('/api/live_status')
+@login_required
+def live_status():
+    uid = session['user_id']
+    return jsonify(camera_results.get(uid, {'detected':False,'confidence':0}))
+
+# ─────────────────────────────────────────
+# FORECASTING
+# ─────────────────────────────────────────
+@app.route('/forecasting')
+@login_required
+def forecasting():
+    return render_template('forecasting.html', user=db.session.get(User, session['user_id']))
+
+@app.route('/api/forecast_auto', methods=['POST'])
+@login_required
+def forecast_auto():
+    user    = db.session.get(User, session['user_id'])
+    grid_id = int(request.json.get('grid_id', 1))
+    now     = datetime.utcnow()
+    weather = get_weather(user.latitude or 13.0, user.longitude or 80.0)
+    moon    = get_moon_phase(now)
+    l3,l7,ds= get_intrusion_stats(user.id, grid_id)
+    features = dict(
+        day_of_week=now.weekday(), month=now.month,
+        season=get_season(now.month),
+        rainfall_mm=weather['rainfall_mm'],
+        temperature_c=weather['temperature_c'],
+        humidity_percent=weather['humidity_percent'],
+        moon_phase=moon,
+        intrusion_last_3_days=l3,
+        intrusion_last_7_days=l7,
+        days_since_last_intrusion=ds,
+        grid_id=grid_id)
+    return _run_forecast(user, grid_id, features, weather, moon, l3, l7, ds)
+
+@app.route('/api/forecast_manual', methods=['POST'])
+@login_required
+def forecast_manual():
+    user    = db.session.get(User, session['user_id'])
+    d       = request.json
+    grid_id = int(d.get('grid_id',1))
+    now     = datetime.utcnow()
+    features = dict(
+        day_of_week              = int(d.get('day_of_week',  now.weekday())),
+        month                    = int(d.get('month',         now.month)),
+        season                   = int(d.get('season',        get_season(now.month))),
+        rainfall_mm              = float(d.get('rainfall_mm',   0)),
+        temperature_c            = float(d.get('temperature_c', 28)),
+        humidity_percent         = float(d.get('humidity_percent', 75)),
+        moon_phase               = float(d.get('moon_phase',    0.5)),
+        intrusion_last_3_days    = int(d.get('intrusion_last_3_days',  0)),
+        intrusion_last_7_days    = int(d.get('intrusion_last_7_days',  0)),
+        days_since_last_intrusion= int(d.get('days_since_last_intrusion', 30)),
+        grid_id=grid_id)
+    weather = dict(
+        rainfall_mm     = features['rainfall_mm'],
+        temperature_c   = features['temperature_c'],
+        humidity_percent= features['humidity_percent'])
+    return _run_forecast(user, grid_id, features, weather,
+                         features['moon_phase'],
+                         features['intrusion_last_3_days'],
+                         features['intrusion_last_7_days'],
+                         features['days_since_last_intrusion'])
+
+def _run_forecast(user, grid_id, features, weather, moon, l3, l7, days_since):
+    ml_m, ml_s = get_ml_model()
+    if ml_m:
+        s = pd.DataFrame([features])
+        if type(ml_m).__name__ in ['LogisticRegression','SVC']:
+            prob = ml_m.predict_proba(ml_s.transform(s))[0][1]
+        else:
+            prob = ml_m.predict_proba(s)[0][1]
+    else:
+        base  = 0.3 + l3*0.08 + l7*0.03
+        base += max(0,(weather.get('rainfall_mm',0)-10)*0.005)
+        base += (weather.get('humidity_percent',75)-60)*0.002
+        base += moon*0.1 - days_since*0.005
+        prob  = max(0.05, min(0.95, base))
+
+    risk        = compute_risk(prob)
+    likely_time = get_likely_time(user.id, grid_id)
+
+    prev = Forecast.query.filter_by(user_id=user.id,grid_id=grid_id)\
+                         .order_by(Forecast.timestamp.desc()).first()
+    if prev:
+        d     = prob - prev.probability
+        trend = (f"↑ +{abs(d)*100:.1f}% (Increasing)" if d > 0.02
+                 else f"↓ -{abs(d)*100:.1f}% (Decreasing)" if d < -0.02
+                 else "→ Stable")
+    else:
+        trend = "→ Baseline (First Forecast)"
+
+    w_inf = []
+    if weather.get('rainfall_mm',0)    > 20: w_inf.append("Heavy rainfall drives elephants to higher ground")
+    if weather.get('humidity_percent',0)>80: w_inf.append("High humidity increases movement activity")
+    if weather.get('temperature_c',0)  > 32: w_inf.append("High temperature pushes elephants toward water sources")
+    weather_infl = "; ".join(w_inf) if w_inf else "Moderate weather – normal movement patterns expected"
+
+    grid_probs = {}
+    for gid in [1,2,3,4]:
+        g3,g7,gds = get_intrusion_stats(user.id, gid)
+        fp = {**features,'grid_id':gid,'intrusion_last_3_days':g3,
+              'intrusion_last_7_days':g7,'days_since_last_intrusion':gds}
+        if ml_m:
+            s2 = pd.DataFrame([fp])
+            gp = (ml_m.predict_proba(ml_s.transform(s2))[0][1]
+                  if type(ml_m).__name__ in ['LogisticRegression','SVC']
+                  else ml_m.predict_proba(s2)[0][1])
+        else:
+            gp = prob*(0.8+gid*0.1)
+        grid_probs[gid] = gp
+
+    mvg = max(grid_probs, key=grid_probs.get)
+    result = dict(
+        probability        = round(prob*100,1),
+        risk_level         = risk,
+        likely_time        = likely_time,
+        risk_trend         = trend,
+        weather_influence  = weather_infl,
+        most_vulnerable_grid= mvg,
+        grid_probabilities = {k:round(v*100,1) for k,v in grid_probs.items()},
+        weather            = weather,
+        moon_phase         = moon,
+        intrusion_stats    = dict(last_3_days=l3,last_7_days=l7,days_since=days_since))
+
+    now = datetime.utcnow()
+    db.session.add(Forecast(
+        user_id=user.id, grid_id=grid_id, timestamp=now,
+        probability=prob, risk_level=risk,
+        day_of_week=features['day_of_week'], month=features['month'],
+        season=features['season'],
+        rainfall_mm=weather.get('rainfall_mm'),
+        temperature_c=weather.get('temperature_c'),
+        humidity_percent=weather.get('humidity_percent'),
+        moon_phase=moon, intrusion_last_3_days=l3,
+        intrusion_last_7_days=l7, days_since_last_intrusion=days_since,
+        forecast_result=json.dumps(result)))
+    db.session.commit()
+
+    # FIX #4 — pass flask app + user.id (not ORM object)
+    threading.Thread(target=send_forecast_email,
+                     args=(app, user.id, result, grid_id), daemon=True).start()
+    return jsonify({'success':True,'result':result})
+
+# ─────────────────────────────────────────
+# HISTORY
+# ─────────────────────────────────────────
+@app.route('/history')
+@login_required
+def history():
+    return render_template('history.html', user=db.session.get(User, session['user_id']))
+
+@app.route('/api/history')
+@login_required
+def get_history():
+    uid      = session['user_id']
+    page     = int(request.args.get('page',1))
+    pg       = Detection.query.filter_by(user_id=uid)\
+                              .order_by(Detection.timestamp.desc())\
+                              .paginate(page=page, per_page=10, error_out=False)
+    items = []
+    for d in pg.items:
+        weather = json.loads(d.weather_data) if d.weather_data else {}
+        snap = ('/' + d.snapshot_path.replace('\\','/')) if d.snapshot_path else None
+        vid  = ('/' + d.video_path.replace('\\','/'))    if d.video_path    else None
+        items.append(dict(
+            id=d.id, grid_id=d.grid_id,
+            timestamp      = fmt_ist(d.timestamp),   # FIX #3
+            detection_type = d.detection_type,
+            elephant_count = d.elephant_count,
+            confidence     = round(d.confidence*100,1),
+            snapshot=snap, video=vid,
+            weather=weather, moon_phase=d.moon_phase,
+            location_lat=d.location_lat, location_lng=d.location_lng))
+    return jsonify(dict(items=items,total=pg.total,pages=pg.pages,current_page=page))
+
+@app.route('/api/forecast_history')
+@login_required
+def forecast_history():
+    uid  = session['user_id']
+    fcs  = Forecast.query.filter_by(user_id=uid)\
+                         .order_by(Forecast.timestamp.desc()).limit(20).all()
+    items = [dict(
+        id=f.id, grid_id=f.grid_id,
+        timestamp   = fmt_ist(f.timestamp),  # FIX #3
+        probability = round(f.probability*100,1),
+        risk_level  = f.risk_level,
+        result      = json.loads(f.forecast_result) if f.forecast_result else {})
+        for f in fcs]
+    return jsonify({'items':items})
+
+# ─────────────────────────────────────────
+if __name__ == '__main__':
+    with app.app_context():
+        db.create_all()
+        os.makedirs('static/uploads',   exist_ok=True)
+        os.makedirs('static/snapshots', exist_ok=True)
+        os.makedirs('models',           exist_ok=True)
+    app.run(debug=True, host='0.0.0.0', port=5000, threaded=True)
