@@ -1,0 +1,202 @@
+{% extends "base.html" %}
+{% block title %}ElephantGuard - AI Wildlife Sentinel{% endblock %}
+
+{% block content %}
+<div class="landing-page">
+  <!-- Hero Section -->
+  <section class="hero">
+    <div class="hero-content">
+      <div class="hero-badge">
+        <span class="badge-dot"></span>
+        AI-Powered Wildlife Protection System
+      </div>
+      <h1 class="hero-title">
+        <span class="title-line-1">Elephant</span>
+        <span class="title-line-2">Guardian</span>
+      </h1>
+      <p class="hero-subtitle">
+        Real-time intrusion detection powered by YOLO AI & predictive forecasting
+        to protect communities and preserve wildlife harmony
+      </p>
+      <div class="hero-actions">
+        <a href="{{ url_for('register') }}" class="btn-primary">
+          Begin Watching <span>→</span>
+        </a>
+        <a href="{{ url_for('login') }}" class="btn-secondary">
+          Sign In
+        </a>
+      </div>
+      <div class="hero-stats">
+        <div class="stat-item">
+          <span class="stat-num">98.7%</span>
+          <span class="stat-label">Detection Accuracy</span>
+        </div>
+        <div class="stat-divider"></div>
+        <div class="stat-item">
+          <span class="stat-num">&lt;2s</span>
+          <span class="stat-label">Alert Response</span>
+        </div>
+        <div class="stat-divider"></div>
+        <div class="stat-item">
+          <span class="stat-num">4 Grids</span>
+          <span class="stat-label">Spatial Coverage</span>
+        </div>
+      </div>
+    </div>
+    <div class="hero-visual">
+      <div class="elephant-silhouette">
+        <div class="elephant-glow"></div>
+        <svg class="elephant-svg" viewBox="0 0 400 300" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <ellipse cx="200" cy="220" rx="120" ry="70" fill="rgba(139,90,43,0.15)"/>
+          <!-- Body -->
+          <ellipse cx="210" cy="185" rx="95" ry="75" fill="rgba(101,67,33,0.6)" stroke="rgba(212,164,86,0.4)" stroke-width="2"/>
+          <!-- Head -->
+          <ellipse cx="130" cy="145" rx="60" ry="55" fill="rgba(101,67,33,0.6)" stroke="rgba(212,164,86,0.4)" stroke-width="2"/>
+          <!-- Trunk -->
+          <path d="M90 165 Q60 190 75 230 Q80 250 95 245 Q105 240 100 220 Q90 200 110 180" fill="rgba(101,67,33,0.6)" stroke="rgba(212,164,86,0.4)" stroke-width="2"/>
+          <!-- Ear -->
+          <ellipse cx="155" cy="135" rx="30" ry="40" fill="rgba(139,90,43,0.4)" stroke="rgba(212,164,86,0.3)" stroke-width="1.5"/>
+          <!-- Legs -->
+          <rect x="150" y="240" width="28" height="50" rx="12" fill="rgba(101,67,33,0.6)" stroke="rgba(212,164,86,0.4)" stroke-width="2"/>
+          <rect x="190" y="245" width="28" height="45" rx="12" fill="rgba(101,67,33,0.6)" stroke="rgba(212,164,86,0.4)" stroke-width="2"/>
+          <rect x="240" y="240" width="28" height="50" rx="12" fill="rgba(101,67,33,0.6)" stroke="rgba(212,164,86,0.4)" stroke-width="2"/>
+          <rect x="280" y="245" width="28" height="45" rx="12" fill="rgba(101,67,33,0.6)" stroke="rgba(212,164,86,0.4)" stroke-width="2"/>
+          <!-- Eye -->
+          <circle cx="118" cy="138" r="6" fill="rgba(212,164,86,0.9)"/>
+          <circle cx="119" cy="137" r="3" fill="#1a0a00"/>
+          <!-- Tusk -->
+          <path d="M100 168 Q82 178 78 195 Q76 205 85 205 Q92 205 94 195 Q96 182 108 175" fill="rgba(220,210,180,0.8)" stroke="rgba(212,164,86,0.5)" stroke-width="1"/>
+          <!-- Detection grid overlay -->
+          <line x1="0" y1="150" x2="400" y2="150" stroke="rgba(0,255,100,0.1)" stroke-width="1" stroke-dasharray="5,5"/>
+          <line x1="200" y1="0" x2="200" y2="300" stroke="rgba(0,255,100,0.1)" stroke-width="1" stroke-dasharray="5,5"/>
+          <!-- Scanning effect -->
+          <rect x="80" y="100" width="230" height="175" rx="4" fill="none" stroke="rgba(0,255,100,0.3)" stroke-width="2" stroke-dasharray="10,5"/>
+          <text x="185" y="95" fill="rgba(0,255,100,0.7)" font-size="10" font-family="monospace">GRID 2</text>
+          <text x="92" y="118" fill="rgba(0,255,100,0.5)" font-size="8" font-family="monospace">CONF: 0.94</text>
+        </svg>
+      </div>
+    </div>
+  </section>
+
+  <!-- Features Section -->
+  <section class="features-section">
+    <div class="section-header">
+      <span class="section-tag">Core Capabilities</span>
+      <h2 class="section-title">Intelligent Forest Sentinel</h2>
+    </div>
+    <div class="features-grid">
+      <div class="feature-card" data-delay="0">
+        <div class="feature-icon-wrap" style="--icon-color: #22c55e;">
+          <span class="feature-icon">🎯</span>
+        </div>
+        <h3>Real-Time YOLO Detection</h3>
+        <p>Industry-leading YOLOv8 model trained on elephant datasets. Live webcam & video upload detection with bounding box visualization and confidence scoring.</p>
+        <div class="feature-tag">Computer Vision AI</div>
+      </div>
+
+      <div class="feature-card" data-delay="100">
+        <div class="feature-icon-wrap" style="--icon-color: #f59e0b;">
+          <span class="feature-icon">🔔</span>
+        </div>
+        <h3>Instant Alert System</h3>
+        <p>Millisecond alerts via email with detection snapshots. Simultaneous repellent sound activation through speakers to deter intrusion.</p>
+        <div class="feature-tag">Multi-Channel Alerts</div>
+      </div>
+
+      <div class="feature-card" data-delay="200">
+        <div class="feature-icon-wrap" style="--icon-color: #8b5cf6;">
+          <span class="feature-icon">🔮</span>
+        </div>
+        <h3>ML-Powered Forecasting</h3>
+        <p>Predict intrusion probability using weather data, moon phase, historical patterns, and seasonal trends. Auto-collects all environmental features.</p>
+        <div class="feature-tag">Predictive Analytics</div>
+      </div>
+
+      <div class="feature-card" data-delay="300">
+        <div class="feature-icon-wrap" style="--icon-color: #06b6d4;">
+          <span class="feature-icon">🗺️</span>
+        </div>
+        <h3>4-Grid Spatial Mapping</h3>
+        <p>Divide your area into 4 monitored zones. Per-grid analytics, risk levels, and most vulnerable zone identification for targeted protection.</p>
+        <div class="feature-tag">Spatial Intelligence</div>
+      </div>
+
+      <div class="feature-card" data-delay="400">
+        <div class="feature-icon-wrap" style="--icon-color: #ef4444;">
+          <span class="feature-icon">🌦️</span>
+        </div>
+        <h3>Environmental Context</h3>
+        <p>Automatic weather data collection — rainfall, temperature, humidity — combined with lunar phase tracking to understand intrusion drivers.</p>
+        <div class="feature-tag">Weather Integration</div>
+      </div>
+
+      <div class="feature-card" data-delay="500">
+        <div class="feature-icon-wrap" style="--icon-color: #84cc16;">
+          <span class="feature-icon">📊</span>
+        </div>
+        <h3>Analytics Dashboard</h3>
+        <p>Complete detection history with video playback, risk trends over time, intrusion statistics, and exportable reports for wildlife management.</p>
+        <div class="feature-tag">Data Analytics</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- How It Works -->
+  <section class="how-section">
+    <div class="section-header">
+      <span class="section-tag">Process Flow</span>
+      <h2 class="section-title">How ElephantGuard Works</h2>
+    </div>
+    <div class="steps-container">
+      <div class="step-item">
+        <div class="step-num">01</div>
+        <div class="step-content">
+          <h4>Register & Configure</h4>
+          <p>Create your account with location. System geocodes your coordinates and links your monitoring zones.</p>
+        </div>
+      </div>
+      <div class="step-connector">⟶</div>
+      <div class="step-item">
+        <div class="step-num">02</div>
+        <div class="step-content">
+          <h4>Select Grid & Detect</h4>
+          <p>Choose your monitoring grid. Upload video or use live webcam. YOLO AI scans every frame.</p>
+        </div>
+      </div>
+      <div class="step-connector">⟶</div>
+      <div class="step-item">
+        <div class="step-num">03</div>
+        <div class="step-content">
+          <h4>Alert & Log</h4>
+          <p>Detection triggers alarm and email alert with snapshot. All events stored with weather & time context.</p>
+        </div>
+      </div>
+      <div class="step-connector">⟶</div>
+      <div class="step-item">
+        <div class="step-num">04</div>
+        <div class="step-content">
+          <h4>Forecast & Prevent</h4>
+          <p>ML model predicts future intrusions. Get probability scores, risk levels, and preventive recommendations.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- CTA Section -->
+  <section class="cta-section">
+    <div class="cta-content">
+      <h2>Start Protecting Your Community</h2>
+      <p>Join the network of AI-powered wildlife monitoring stations</p>
+      <a href="{{ url_for('register') }}" class="btn-primary btn-large">
+        Deploy Your Sentinel →
+      </a>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer class="landing-footer">
+    <div class="footer-brand">🐘 ElephantGuard</div>
+    <p class="footer-tagline">AI-Powered Wildlife Protection • Preserving Harmony Between Humans & Elephants</p>
+  </footer>
+</div>
+{% endblock %}

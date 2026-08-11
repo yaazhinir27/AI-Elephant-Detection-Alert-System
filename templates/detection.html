@@ -1,0 +1,388 @@
+{% extends "base.html" %}
+{% block title %}Detection — ElephantGuard{% endblock %}
+
+{% block content %}
+<div class="page-container">
+  <div class="page-header">
+    <div>
+      <h1 class="page-title">🎯 Elephant Detection</h1>
+      <p class="page-subtitle">Choose your detection mode and monitoring grid</p>
+    </div>
+  </div>
+
+  <!-- Mode Selector -->
+  <div class="mode-selector">
+    <button class="mode-btn active" id="btn-video" onclick="switchMode('video')">
+      <span class="mode-icon">📹</span><span>Video Upload</span>
+    </button>
+    <button class="mode-btn" id="btn-live" onclick="switchMode('live')">
+      <span class="mode-icon">📷</span><span>Live Webcam</span>
+    </button>
+  </div>
+
+  <!-- Grid Selector (shared) -->
+  <div class="grid-selector-section">
+    <h3 class="section-h3">Select Monitoring Grid</h3>
+    <div class="grid-visual-selector">
+      <div class="grid-map">
+        {% for g in [1,2,3,4] %}
+        <div class="grid-cell" id="grid-{{ g }}" onclick="selectGrid({{ g }})">
+          <span class="grid-label">Grid {{ g }}</span>
+          <span class="grid-zone">Zone {{ g }}</span>
+        </div>
+        {% endfor %}
+      </div>
+      <p class="grid-hint">Selected: <strong id="selected-grid-display">Grid 1</strong></p>
+    </div>
+  </div>
+
+  <!-- ═══ VIDEO UPLOAD PANEL ═══ -->
+  <div id="video-mode" class="detection-panel">
+
+    <!-- Step 1: Upload Zone -->
+    <div id="upload-zone" class="upload-zone" ondragover="event.preventDefault();this.classList.add('drag-over')"
+         ondragleave="this.classList.remove('drag-over')"
+         ondrop="handleDrop(event)">
+      <div class="upload-content">
+        <div class="upload-icon">🎬</div>
+        <h3>Drop Your Video File Here</h3>
+        <p>Supports MP4, AVI, MOV, MKV &nbsp;·&nbsp; Max 500 MB</p>
+        <label class="btn-secondary upload-label" style="margin-top:0.5rem;cursor:pointer;">
+          Browse Files
+          <input type="file" id="video-input" accept="video/*" hidden onchange="handleVideoSelect(this)">
+        </label>
+      </div>
+    </div>
+
+    <!-- Step 2: Preview + Detect -->
+    <div id="video-preview-section" class="hidden">
+      <div class="video-preview-wrap">
+        <video id="video-preview" controls class="preview-video"></video>
+        <div class="video-meta" id="video-meta"></div>
+      </div>
+      <div style="display:flex;gap:1rem;flex-wrap:wrap;margin-top:1rem;">
+        <button class="btn-primary btn-detect" id="detect-btn" onclick="startVideoDetection()">
+          🔍 Start Detection
+        </button>
+        <button class="btn-secondary" onclick="resetDetection()">✕ Change Video</button>
+      </div>
+    </div>
+
+    <!-- Step 3: Processing Progress -->
+    <div id="detection-progress" class="hidden">
+      <div class="progress-card">
+        <div class="progress-spinner">
+          <div class="spinner-ring"></div>
+          <span class="spinner-ele">🐘</span>
+        </div>
+        <h3 id="progress-title">AI Analysing Video…</h3>
+        <p id="progress-subtitle">YOLO model scanning every frame for elephants</p>
+        <div class="progress-bar-wrap" style="margin-top:1.25rem;">
+          <div class="progress-bar" id="progress-bar" style="width:0%"></div>
+        </div>
+        <p class="progress-pct" id="progress-pct">0%</p>
+      </div>
+    </div>
+
+    <!-- Step 4: Result -->
+    <div id="detection-result" class="hidden"></div>
+
+  </div><!-- end video-mode -->
+
+  <!-- ═══ LIVE WEBCAM PANEL ═══ -->
+  <div id="live-mode" class="detection-panel hidden">
+    <div class="live-controls">
+      <button class="btn-primary" id="start-live-btn" onclick="startLive()">
+        🔴 Start Live Detection
+      </button>
+      <button class="btn-danger hidden" id="stop-live-btn" onclick="stopLive()">
+        ⏹ Stop Detection
+      </button>
+    </div>
+
+    <div id="live-feed-container" class="hidden">
+      <div class="live-feed-wrap">
+        <div class="live-badge">🔴 LIVE</div>
+        <img id="live-feed" src="" alt="Live Detection Feed" class="live-video-feed">
+        <div class="feed-overlay">
+          <div class="feed-info">
+            <span id="live-grid-display" class="grid-badge">Grid 1</span>
+            <span id="live-status-text" class="status-monitor">🟢 Monitoring…</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Alert panel that appears on detection -->
+      <div id="live-alert" class="hidden live-alert-panel">
+        <div class="alert-icon-large">🚨</div>
+        <h2>ELEPHANT DETECTED!</h2>
+        <p>Repellent alarm is active. Email alert sent to <strong>{{ user.email }}</strong></p>
+        <div class="alert-detail-row" id="alert-detail-row"></div>
+        <button onclick="dismissLiveAlert()" class="btn-secondary" style="margin-top:1rem;">
+          Dismiss &amp; Continue Monitoring
+        </button>
+      </div>
+    </div>
+  </div><!-- end live-mode -->
+
+</div><!-- page-container -->
+
+<script>
+// ─── State ────────────────────────────────────────────
+let selectedGrid      = 1;
+let liveActive        = false;
+let liveStatusTimer   = null;
+let pollTimer         = null;
+let alarmPlaying      = false;
+let selectedFile      = null;
+
+// ─── Grid ─────────────────────────────────────────────
+function selectGrid(g) {
+  selectedGrid = g;
+  document.querySelectorAll('.grid-cell').forEach(c => c.classList.remove('selected'));
+  document.getElementById('grid-' + g).classList.add('selected');
+  document.getElementById('selected-grid-display').textContent = 'Grid ' + g;
+  const lgd = document.getElementById('live-grid-display');
+  if (lgd) lgd.textContent = 'Grid ' + g;
+}
+selectGrid(1);
+
+// ─── Mode ─────────────────────────────────────────────
+function switchMode(mode) {
+  document.getElementById('video-mode').classList.toggle('hidden', mode !== 'video');
+  document.getElementById('live-mode').classList.toggle('hidden',  mode !== 'live');
+  document.getElementById('btn-video').classList.toggle('active', mode === 'video');
+  document.getElementById('btn-live').classList.toggle('active',  mode === 'live');
+  if (mode !== 'live' && liveActive) stopLive();
+}
+
+// ─── Drop / select file ───────────────────────────────
+function handleDrop(e) {
+  e.preventDefault();
+  document.getElementById('upload-zone').classList.remove('drag-over');
+  const file = e.dataTransfer.files[0];
+  if (file && file.type.startsWith('video/')) loadVideoFile(file);
+  else showToast('Please drop a valid video file.', 'warning');
+}
+function handleVideoSelect(input) {
+  if (input.files[0]) loadVideoFile(input.files[0]);
+}
+function loadVideoFile(file) {
+  selectedFile = file;
+  const preview = document.getElementById('video-preview');
+  preview.src = URL.createObjectURL(file);
+  document.getElementById('upload-zone').style.display = 'none';
+  document.getElementById('video-preview-section').classList.remove('hidden');
+  document.getElementById('video-meta').innerHTML =
+    `<span>📄 ${file.name}</span><span>📦 ${(file.size/1024/1024).toFixed(1)} MB</span>`;
+}
+
+// ─── FIX #2: Video Detection with progress polling ────
+async function startVideoDetection() {
+  if (!selectedFile) { showToast('Select a video first.','warning'); return; }
+
+  document.getElementById('video-preview-section').classList.add('hidden');
+  document.getElementById('detection-progress').classList.remove('hidden');
+  setProgress(0);
+
+  const formData = new FormData();
+  formData.append('grid_id', selectedGrid);
+  formData.append('video',   selectedFile);
+
+  try {
+    const resp = await fetch('/api/detect_video', { method:'POST', body:formData });
+    const data = await resp.json();
+    if (!data.success) { showToast('Upload failed: ' + (data.message||''), 'error'); resetDetection(); return; }
+    // now poll for result
+    pollTimer = setInterval(pollVideoStatus, 800);
+  } catch(err) {
+    showToast('Network error: ' + err.message, 'error');
+    resetDetection();
+  }
+}
+
+async function pollVideoStatus() {
+  try {
+    const resp = await fetch('/api/detect_video_status');
+    const job  = await resp.json();
+
+    if (job.status === 'processing') {
+      setProgress(job.progress || 0);
+      return;
+    }
+    if (job.status === 'done') {
+      clearInterval(pollTimer);
+      pollTimer = null;
+      setProgress(100);
+      await new Promise(r => setTimeout(r, 500));
+      document.getElementById('detection-progress').classList.add('hidden');
+      showVideoResult(job.result);
+    }
+  } catch(err) {
+    console.error('Poll error:', err);
+  }
+}
+
+function setProgress(pct) {
+  document.getElementById('progress-bar').style.width = pct + '%';
+  document.getElementById('progress-pct').textContent = pct + '%';
+  if (pct > 80)
+    document.getElementById('progress-subtitle').textContent = 'Finalising detection…';
+}
+
+// ─── Show Result ──────────────────────────────────────
+function showVideoResult(data) {
+  const container = document.getElementById('detection-result');
+  container.classList.remove('hidden');
+  container.scrollIntoView({behavior:'smooth'});
+
+  if (!data) {
+    container.innerHTML = `<div class="result-card safe-result">
+      <p>Detection completed — no elephants detected.</p>
+      <button class="btn-secondary" onclick="resetDetection()">New Detection</button></div>`;
+    return;
+  }
+
+  if (data.elephant_detected) {
+    playAlarm();
+    container.innerHTML = `
+      <div class="result-card danger-result">
+        <div class="result-header">
+          <span class="result-icon">🚨</span>
+          <h2>ELEPHANT DETECTED!</h2>
+        </div>
+        ${data.snapshot
+          ? `<img src="${data.snapshot}" alt="Detection Snapshot" class="result-snapshot"
+                  onerror="this.style.display='none'">`
+          : '<p style="color:var(--text-muted);margin-bottom:1rem;">No snapshot captured</p>'}
+        <div class="result-details-grid">
+          <div class="res-item"><span class="res-label">Grid</span><span class="res-val">Grid ${data.grid_id}</span></div>
+          <div class="res-item"><span class="res-label">Confidence</span><span class="res-val">${data.confidence}%</span></div>
+          <div class="res-item"><span class="res-label">Time (IST)</span><span class="res-val">${data.timestamp}</span></div>
+          <div class="res-item"><span class="res-label">Temperature</span><span class="res-val">${data.weather?.temperature_c ?? 'N/A'}°C</span></div>
+          <div class="res-item"><span class="res-label">Humidity</span><span class="res-val">${data.weather?.humidity_percent ?? 'N/A'}%</span></div>
+          <div class="res-item"><span class="res-label">Rainfall</span><span class="res-val">${data.weather?.rainfall_mm ?? '0'} mm</span></div>
+        </div>
+        <p class="email-notice">📧 Alert email with snapshot sent to your registered address</p>
+        <div style="display:flex;gap:1rem;flex-wrap:wrap;margin-top:0.5rem;">
+          <button class="btn-secondary" onclick="stopAlarm();resetDetection()">New Detection</button>
+          <button class="btn-secondary" onclick="stopAlarm()">Stop Alarm</button>
+        </div>
+      </div>`;
+  } else {
+    container.innerHTML = `
+      <div class="result-card safe-result">
+        <div class="result-header">
+          <span class="result-icon">✅</span>
+          <h2>Area Clear — No Elephant Detected</h2>
+        </div>
+        <p class="safe-msg">No elephants found in the uploaded video. The area appears secure.</p>
+        <div class="result-details-grid">
+          <div class="res-item"><span class="res-label">Grid</span><span class="res-val">Grid ${data.grid_id}</span></div>
+          <div class="res-item"><span class="res-label">Time (IST)</span><span class="res-val">${data.timestamp}</span></div>
+          <div class="res-item"><span class="res-label">Temperature</span><span class="res-val">${data.weather?.temperature_c ?? 'N/A'}°C</span></div>
+        </div>
+        <button class="btn-secondary" onclick="resetDetection()" style="margin-top:1rem;">New Detection</button>
+      </div>`;
+  }
+}
+
+function resetDetection() {
+  stopAlarm();
+  if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+  document.getElementById('detection-result').classList.add('hidden');
+  document.getElementById('detection-progress').classList.add('hidden');
+  document.getElementById('upload-zone').style.display = '';
+  document.getElementById('video-preview-section').classList.add('hidden');
+  document.getElementById('video-input').value = '';
+  selectedFile = null;
+  setProgress(0);
+}
+
+// ─── Live Detection ───────────────────────────────────
+async function startLive() {
+  try {
+    const r = await fetch(`/api/start_live/${selectedGrid}`);
+    const d = await r.json();
+    if (!d.success) { showToast('Failed to start camera','error'); return; }
+
+    liveActive = true;
+    document.getElementById('start-live-btn').classList.add('hidden');
+    document.getElementById('stop-live-btn').classList.remove('hidden');
+    document.getElementById('live-feed-container').classList.remove('hidden');
+    document.getElementById('live-grid-display').textContent = 'Grid ' + selectedGrid;
+
+    const img = document.getElementById('live-feed');
+    img.src = `/video_feed/${selectedGrid}?t=${Date.now()}`;
+
+    liveStatusTimer = setInterval(checkLiveStatus, 1500);
+    showToast('Live detection started · Grid ' + selectedGrid, 'info');
+  } catch(err) {
+    showToast('Camera error: ' + err.message, 'error');
+  }
+}
+
+async function stopLive() {
+  await fetch('/api/stop_live').catch(()=>{});
+  liveActive = false;
+  if (liveStatusTimer) { clearInterval(liveStatusTimer); liveStatusTimer = null; }
+  document.getElementById('start-live-btn').classList.remove('hidden');
+  document.getElementById('stop-live-btn').classList.add('hidden');
+  document.getElementById('live-feed-container').classList.add('hidden');
+  document.getElementById('live-feed').src = '';
+  document.getElementById('live-alert').classList.add('hidden');
+  stopAlarm();
+  showToast('Live detection stopped.', 'info');
+}
+
+async function checkLiveStatus() {
+  try {
+    const r   = await fetch('/api/live_status');
+    const d   = await r.json();
+    const stEl= document.getElementById('live-status-text');
+    const alEl= document.getElementById('live-alert');
+
+    if (d.detected) {
+      stEl.textContent = '🚨 ELEPHANT DETECTED!';
+      stEl.style.color = '#ef4444';
+      alEl.classList.remove('hidden');
+      document.getElementById('alert-detail-row').innerHTML =
+        `<span>Confidence: <strong>${d.confidence}%</strong></span>
+         <span>Grid: <strong>Grid ${selectedGrid}</strong></span>`;
+      playAlarm();
+    } else {
+      stEl.textContent = '🟢 Monitoring…';
+      stEl.style.color = '#4ade80';
+    }
+  } catch(e) {}
+}
+
+function dismissLiveAlert() {
+  document.getElementById('live-alert').classList.add('hidden');
+  stopAlarm();
+  // reset detection_saved flag on server side by resetting camera_results
+  fetch('/api/live_status');
+}
+
+// ─── Alarm ────────────────────────────────────────────
+function playAlarm() {
+  if (alarmPlaying) return;
+  const a = document.getElementById('alarm-audio');
+  if (a) {
+    a.play().catch(e => console.warn('Alarm play blocked:', e));
+    alarmPlaying = true;
+  }
+}
+function stopAlarm() {
+  const a = document.getElementById('alarm-audio');
+  if (a) { a.pause(); a.currentTime = 0; }
+  alarmPlaying = false;
+}
+
+// cleanup on page leave
+window.addEventListener('beforeunload', () => {
+  if (liveActive) fetch('/api/stop_live').catch(()=>{});
+  stopAlarm();
+});
+</script>
+{% endblock %}

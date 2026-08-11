@@ -1,0 +1,240 @@
+{% extends "base.html" %}
+{% block title %}History — ElephantGuard{% endblock %}
+
+{% block content %}
+<div class="page-container">
+  <div class="page-header">
+    <div>
+      <h1 class="page-title">📋 Detection History</h1>
+      <p class="page-subtitle">All detection events and forecast records</p>
+    </div>
+    <div class="history-filter">
+      <button class="filter-btn active" onclick="loadHistory('detections')">🎯 Detections</button>
+      <button class="filter-btn" onclick="loadHistory('forecasts')">🔮 Forecasts</button>
+    </div>
+  </div>
+
+  <!-- Detection History -->
+  <div id="detection-history">
+    <div class="history-grid" id="detection-cards">
+      <div class="loading-state">
+        <div class="spinner-ring"></div>
+        <p>Loading detection history...</p>
+      </div>
+    </div>
+    <div class="pagination" id="pagination"></div>
+  </div>
+
+  <!-- Forecast History -->
+  <div id="forecast-history" class="hidden">
+    <div class="history-grid" id="forecast-cards">
+      <div class="loading-state">
+        <div class="spinner-ring"></div>
+        <p>Loading forecast history...</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Detection Detail Modal -->
+<div class="modal-overlay hidden" id="detail-modal">
+  <div class="modal-box large-modal">
+    <button class="modal-close" onclick="closeModal()">✕</button>
+    <div class="modal-content" id="modal-content"></div>
+  </div>
+</div>
+
+<script>
+let currentPage = 1;
+let activeTab = 'detections';
+
+function loadHistory(tab) {
+  activeTab = tab;
+  document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+  event.target.classList.add('active');
+  document.getElementById('detection-history').classList.toggle('hidden', tab !== 'detections');
+  document.getElementById('forecast-history').classList.toggle('hidden', tab !== 'forecasts');
+  if (tab === 'detections') loadDetections(1);
+  else loadForecasts();
+}
+
+async function loadDetections(page = 1) {
+  currentPage = page;
+  const container = document.getElementById('detection-cards');
+  container.innerHTML = '<div class="loading-state"><div class="spinner-ring"></div><p>Loading...</p></div>';
+
+  try {
+    const resp = await fetch(`/api/history?page=${page}`);
+    const data = await resp.json();
+    renderDetections(data.items);
+    renderPagination(data.pages, page);
+  } catch (e) {
+    container.innerHTML = '<p class="error-msg">Failed to load history.</p>';
+  }
+}
+
+function renderDetections(items) {
+  const container = document.getElementById('detection-cards');
+  if (!items.length) {
+    container.innerHTML = '<div class="empty-state"><span class="empty-icon">🌿</span><p>No detections yet. Start your first detection!</p></div>';
+    return;
+  }
+
+  container.innerHTML = items.map(d => `
+    <div class="history-card ${d.elephant_count > 0 ? 'danger-card' : 'safe-card'}" onclick="showDetail(${d.id})">
+      <div class="hcard-header">
+        <div class="hcard-status">
+          ${d.elephant_count > 0 ? '<span class="status-badge danger">🐘 DETECTED</span>' : '<span class="status-badge safe">✓ Clear</span>'}
+          <span class="hcard-type type-${d.detection_type}">${d.detection_type.toUpperCase()}</span>
+        </div>
+        <span class="grid-badge">Grid ${d.grid_id}</span>
+      </div>
+      ${d.snapshot ? `<div class="hcard-snap"><img src="${d.snapshot}" alt="Snapshot" loading="lazy"><div class="snap-overlay">View Details</div></div>` : '<div class="hcard-no-snap">📹 No Snapshot</div>'}
+      <div class="hcard-body">
+        <div class="hcard-time">🕒 ${d.timestamp}</div>
+        ${d.confidence > 0 ? `<div class="hcard-conf">Confidence: <strong>${d.confidence}%</strong></div>` : ''}
+        <div class="hcard-weather">
+          🌡️ ${d.weather?.temperature_c || 'N/A'}°C &nbsp; 💧 ${d.weather?.humidity_percent || 'N/A'}%
+        </div>
+      </div>
+    </div>
+  `).join('');
+}
+
+async function loadForecasts() {
+  const container = document.getElementById('forecast-cards');
+  container.innerHTML = '<div class="loading-state"><div class="spinner-ring"></div><p>Loading...</p></div>';
+
+  try {
+    const resp = await fetch('/api/forecast_history');
+    const data = await resp.json();
+    renderForecasts(data.items);
+  } catch (e) {
+    container.innerHTML = '<p class="error-msg">Failed to load forecasts.</p>';
+  }
+}
+
+function renderForecasts(items) {
+  const container = document.getElementById('forecast-cards');
+  if (!items.length) {
+    container.innerHTML = '<div class="empty-state"><span class="empty-icon">🔮</span><p>No forecasts yet. Run your first forecast!</p></div>';
+    return;
+  }
+
+  const riskColors = {'Low':'#22c55e','Medium':'#f59e0b','High':'#ef4444','Very High':'#7f1d1d'};
+
+  container.innerHTML = items.map(f => `
+    <div class="history-card forecast-hist-card" onclick="showForecastDetail(${JSON.stringify(f.result).replace(/"/g,'&quot;')}, ${f.grid_id})">
+      <div class="hcard-header">
+        <span class="grid-badge">Grid ${f.grid_id}</span>
+        <span class="risk-pill" style="background:${riskColors[f.risk_level]}">${f.risk_level}</span>
+      </div>
+      <div class="prob-gauge-mini">
+        <div class="prob-fill-mini" style="width:${f.probability}%; background:${riskColors[f.risk_level]}"></div>
+      </div>
+      <div class="hcard-body">
+        <div class="prob-number-hist">${f.probability}%</div>
+        <div class="hcard-time">🕒 ${f.timestamp}</div>
+      </div>
+    </div>
+  `).join('');
+}
+
+function renderPagination(totalPages, current) {
+  const el = document.getElementById('pagination');
+  if (totalPages <= 1) { el.innerHTML = ''; return; }
+
+  let html = '';
+  if (current > 1) html += `<button class="page-btn" onclick="loadDetections(${current-1})">← Prev</button>`;
+  for (let i = 1; i <= totalPages; i++) {
+    html += `<button class="page-btn ${i === current ? 'active' : ''}" onclick="loadDetections(${i})">${i}</button>`;
+  }
+  if (current < totalPages) html += `<button class="page-btn" onclick="loadDetections(${current+1})">Next →</button>`;
+  el.innerHTML = html;
+}
+
+async function showDetail(id) {
+  const resp = await fetch(`/api/history?page=${currentPage}`);
+  const data = await resp.json();
+  const det = data.items.find(d => d.id === id);
+  if (!det) return;
+
+  const modal = document.getElementById('detail-modal');
+  const content = document.getElementById('modal-content');
+
+  content.innerHTML = `
+    <div class="modal-header">
+      <h2>${det.elephant_count > 0 ? '🚨 Elephant Detection Record' : '✅ Clear Detection Record'}</h2>
+      <span class="grid-badge">Grid ${det.grid_id}</span>
+    </div>
+    <div class="modal-body-grid">
+      ${det.snapshot ? `
+        <div class="modal-snapshot-wrap">
+          <img src="${det.snapshot}" alt="Detection Snapshot" class="modal-snapshot">
+          <div class="snapshot-label">Detection Snapshot</div>
+        </div>` : ''}
+      ${det.video ? `
+        <div class="modal-video-wrap">
+          <video src="${det.video}" controls class="modal-video"></video>
+          <div class="snapshot-label">Detection Video</div>
+        </div>` : ''}
+      <div class="modal-details">
+        <div class="detail-row"><span>📅 Timestamp</span><strong>${det.timestamp}</strong></div>
+        <div class="detail-row"><span>🗺️ Grid</span><strong>Grid ${det.grid_id}</strong></div>
+        <div class="detail-row"><span>📹 Type</span><strong>${det.detection_type.toUpperCase()}</strong></div>
+        <div class="detail-row"><span>🎯 Confidence</span><strong>${det.confidence}%</strong></div>
+        <div class="detail-row"><span>🌡️ Temperature</span><strong>${det.weather?.temperature_c || 'N/A'}°C</strong></div>
+        <div class="detail-row"><span>💧 Humidity</span><strong>${det.weather?.humidity_percent || 'N/A'}%</strong></div>
+        <div class="detail-row"><span>🌧️ Rainfall</span><strong>${det.weather?.rainfall_mm || '0'} mm</strong></div>
+        <div class="detail-row"><span>🌙 Moon Phase</span><strong>${det.moon_phase ? (det.moon_phase * 100).toFixed(1) + '%' : 'N/A'}</strong></div>
+        ${det.location_lat ? `<div class="detail-row"><span>📍 Coordinates</span><strong>${det.location_lat.toFixed(4)}, ${det.location_lng.toFixed(4)}</strong></div>` : ''}
+      </div>
+    </div>`;
+
+  modal.classList.remove('hidden');
+}
+
+function showForecastDetail(result, gridId) {
+  const modal = document.getElementById('detail-modal');
+  const content = document.getElementById('modal-content');
+  const riskColors = {'Low':'#22c55e','Medium':'#f59e0b','High':'#ef4444','Very High':'#7f1d1d'};
+  const color = riskColors[result.risk_level] || '#aaa';
+
+  content.innerHTML = `
+    <div class="modal-header">
+      <h2>🔮 Forecast Report — Grid ${gridId}</h2>
+    </div>
+    <div class="forecast-modal-content">
+      <div class="prob-circle" style="--prob-color:${color}">
+        <span class="prob-big">${result.probability}%</span>
+        <span>Intrusion Probability</span>
+      </div>
+      <div class="modal-details">
+        <div class="detail-row"><span>⚠️ Risk Level</span><strong style="color:${color}">${result.risk_level}</strong></div>
+        <div class="detail-row"><span>🕒 Likely Time</span><strong>${result.likely_time}</strong></div>
+        <div class="detail-row"><span>📈 Risk Trend</span><strong>${result.risk_trend}</strong></div>
+        <div class="detail-row"><span>🗺️ Most Vulnerable</span><strong>Grid ${result.most_vulnerable_grid}</strong></div>
+        <div class="detail-row"><span>🌦️ Weather</span><strong>${result.weather_influence}</strong></div>
+        <div class="detail-row"><span>🌡️ Temperature</span><strong>${result.weather?.temperature_c}°C</strong></div>
+        <div class="detail-row"><span>💧 Humidity</span><strong>${result.weather?.humidity_percent}%</strong></div>
+        <div class="detail-row"><span>📊 Intrusions (3d)</span><strong>${result.intrusion_stats?.last_3_days}</strong></div>
+        <div class="detail-row"><span>📊 Intrusions (7d)</span><strong>${result.intrusion_stats?.last_7_days}</strong></div>
+      </div>
+    </div>`;
+
+  modal.classList.remove('hidden');
+}
+
+function closeModal() {
+  document.getElementById('detail-modal').classList.add('hidden');
+  document.getElementById('modal-content').innerHTML = '';
+}
+
+document.getElementById('detail-modal').addEventListener('click', e => {
+  if (e.target === e.currentTarget) closeModal();
+});
+
+// Load on startup
+loadDetections(1);
+</script>
+{% endblock %}

@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}ElephantGuard{% endblock %} — AI Wildlife Sentinel</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Cinzel+Decorative:wght@700;900&family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300;1,400&family=JetBrains+Mono:wght@300;400;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
+  {% block extra_head %}{% endblock %}
+</head>
+<body>
+  <div class="forest-bg">
+    <div class="forest-layer-1"></div>
+    <div class="forest-layer-2"></div>
+    <div class="particles" id="particles"></div>
+  </div>
+
+  {% if session.user_id %}
+  <nav class="navbar">
+    <div class="nav-brand">
+      <span class="nav-icon">🐘</span>
+      <span class="brand-text">ElephantGuard</span>
+    </div>
+    <div class="nav-links">
+      <a href="{{ url_for('dashboard') }}" class="nav-link {% if request.endpoint == 'dashboard' %}active{% endif %}">
+        <span>⚡</span> Dashboard
+      </a>
+      <a href="{{ url_for('detection') }}" class="nav-link {% if request.endpoint == 'detection' %}active{% endif %}">
+        <span>🎯</span> Detection
+      </a>
+      <a href="{{ url_for('forecasting') }}" class="nav-link {% if request.endpoint == 'forecasting' %}active{% endif %}">
+        <span>🔮</span> Forecasting
+      </a>
+      <a href="{{ url_for('history') }}" class="nav-link {% if request.endpoint == 'history' %}active{% endif %}">
+        <span>📋</span> History
+      </a>
+      <a href="{{ url_for('logout') }}" class="nav-link logout-btn">
+        <span>🚪</span> Logout
+      </a>
+    </div>
+    <div class="nav-user">
+      <div class="user-avatar">{{ session.username[0].upper() }}</div>
+      <span class="user-name">{{ session.username }}</span>
+    </div>
+  </nav>
+  {% endif %}
+
+  <main class="main-content {% if session.user_id %}has-nav{% endif %}">
+    {% block content %}{% endblock %}
+  </main>
+
+  <audio id="alarm-audio" loop>
+    <source src="{{ url_for('static', filename='sounds/alarm.mp4') }}" type="video/mp4">
+  </audio>
+
+  <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+  {% block extra_scripts %}{% endblock %}
+</body>
+</html>

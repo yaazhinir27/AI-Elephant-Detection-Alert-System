@@ -1,0 +1,375 @@
+{% extends "base.html" %}
+{% block title %}Forecasting — ElephantGuard{% endblock %}
+
+{% block content %}
+<div class="page-container">
+  <div class="page-header">
+    <div>
+      <h1 class="page-title">🔮 Intrusion Forecasting</h1>
+      <p class="page-subtitle">AI-powered elephant intrusion prediction</p>
+    </div>
+  </div>
+
+  <!-- Forecast Mode Toggle -->
+  <div class="mode-selector">
+    <button class="mode-btn active" id="btn-auto" onclick="switchForecastMode('auto')">
+      <span class="mode-icon">⚡</span>
+      <span>Auto Prediction</span>
+    </button>
+    <button class="mode-btn" id="btn-manual" onclick="switchForecastMode('manual')">
+      <span class="mode-icon">✏️</span>
+      <span>Manual Input</span>
+    </button>
+  </div>
+
+  <!-- AUTO PREDICTION -->
+  <div id="auto-mode" class="forecast-panel">
+    <div class="auto-forecast-card">
+      <div class="auto-illustration">
+        <div class="auto-rings">
+          <div class="aring aring-1"></div>
+          <div class="aring aring-2"></div>
+          <div class="aring aring-3"></div>
+          <span class="aring-center">🔮</span>
+        </div>
+        <div class="auto-info">
+          <h3>Automatic Feature Collection</h3>
+          <p>System will auto-fetch: weather data, moon phase, intrusion history, date features</p>
+          <ul class="auto-feature-list">
+            <li>🌦️ Real-time weather from Open-Meteo API</li>
+            <li>🌙 Moon phase calculation</li>
+            <li>📊 Intrusion history from your database</li>
+            <li>📅 Current date/time features</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="auto-grid-select">
+        <label class="form-label">Select Grid to Forecast</label>
+        <div class="grid-visual-selector">
+          <div class="grid-map">
+            {% for g in [1,2,3,4] %}
+            <div class="grid-cell" id="fc-grid-{{ g }}" onclick="selectForecastGrid({{ g }})">
+              <span class="grid-label">Grid {{ g }}</span>
+            </div>
+            {% endfor %}
+          </div>
+        </div>
+        <button class="btn-primary btn-forecast" id="auto-forecast-btn" onclick="runAutoForecast()">
+          <span id="auto-btn-text">⚡ Generate Forecast</span>
+          <span id="auto-btn-loader" class="hidden">🔄 Computing...</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MANUAL PREDICTION -->
+  <div id="manual-mode" class="forecast-panel hidden">
+    <div class="manual-form-card">
+      <h3>Manual Feature Input</h3>
+      <form id="manual-form">
+        <div class="form-section">
+          <h4 class="form-section-title">📅 Date & Time Features</h4>
+          <div class="form-row-3">
+            <div class="form-group">
+              <label class="form-label">Day of Week <span class="hint">(0=Mon, 6=Sun)</span></label>
+              <input type="number" name="day_of_week" class="form-input" min="0" max="6" value="4">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Month <span class="hint">(1-12)</span></label>
+              <input type="number" name="month" class="form-input" min="1" max="12" value="2">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Season <span class="hint">(0=Winter...3=Autumn)</span></label>
+              <select name="season" class="form-input">
+                <option value="0">0 — Winter</option>
+                <option value="1">1 — Spring</option>
+                <option value="2">2 — Summer</option>
+                <option value="3">3 — Autumn</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <div class="form-section">
+          <h4 class="form-section-title">🌦️ Weather Features</h4>
+          <div class="form-row-3">
+            <div class="form-group">
+              <label class="form-label">Rainfall (mm)</label>
+              <input type="number" name="rainfall_mm" class="form-input" step="0.1" value="12.5">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Temperature (°C)</label>
+              <input type="number" name="temperature_c" class="form-input" step="0.1" value="27.3">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Humidity (%)</label>
+              <input type="number" name="humidity_percent" class="form-input" min="0" max="100" value="78">
+            </div>
+          </div>
+        </div>
+
+        <div class="form-section">
+          <h4 class="form-section-title">🌙 Lunar & History Features</h4>
+          <div class="form-row-3">
+            <div class="form-group">
+              <label class="form-label">Moon Phase <span class="hint">(0.0–1.0)</span></label>
+              <input type="number" name="moon_phase" class="form-input" step="0.01" min="0" max="1" value="0.82">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Intrusions Last 3 Days</label>
+              <input type="number" name="intrusion_last_3_days" class="form-input" min="0" value="2">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Intrusions Last 7 Days</label>
+              <input type="number" name="intrusion_last_7_days" class="form-input" min="0" value="5">
+            </div>
+          </div>
+          <div class="form-row-3">
+            <div class="form-group">
+              <label class="form-label">Days Since Last Intrusion</label>
+              <input type="number" name="days_since_last_intrusion" class="form-input" min="0" value="1">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Grid ID</label>
+              <select name="grid_id" class="form-input">
+                <option value="1">Grid 1</option>
+                <option value="2">Grid 2</option>
+                <option value="3">Grid 3</option>
+                <option value="4">Grid 4</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <button type="submit" class="btn-primary btn-forecast">
+          <span id="manual-btn-text">🔮 Predict Intrusion</span>
+          <span id="manual-btn-loader" class="hidden">🔄 Computing...</span>
+        </button>
+      </form>
+    </div>
+  </div>
+
+  <!-- FORECAST RESULT -->
+  <div id="forecast-result" class="hidden">
+    <div class="result-section-title">
+      <h2>📊 Forecast Analysis</h2>
+    </div>
+
+    <!-- Probability Gauge -->
+    <div class="forecast-results-grid">
+      <div class="forecast-main-card">
+        <div class="gauge-wrap">
+          <canvas id="probability-gauge" width="240" height="140"></canvas>
+          <div class="gauge-center">
+            <span id="prob-display" class="prob-number">--%</span>
+            <span class="prob-label">Intrusion Probability</span>
+          </div>
+        </div>
+        <div class="risk-badge-large" id="risk-badge">
+          <span id="risk-level-text">--</span>
+        </div>
+      </div>
+
+      <div class="forecast-details-cards">
+        <div class="fc-detail-card">
+          <div class="fc-detail-icon">🕒</div>
+          <div class="fc-detail-info">
+            <span class="fc-detail-label">Likely Intrusion Time</span>
+            <span class="fc-detail-val" id="likely-time">--</span>
+          </div>
+        </div>
+        <div class="fc-detail-card">
+          <div class="fc-detail-icon">📈</div>
+          <div class="fc-detail-info">
+            <span class="fc-detail-label">Risk Trend</span>
+            <span class="fc-detail-val" id="risk-trend">--</span>
+          </div>
+        </div>
+        <div class="fc-detail-card">
+          <div class="fc-detail-icon">🌦️</div>
+          <div class="fc-detail-info">
+            <span class="fc-detail-label">Weather Influence</span>
+            <span class="fc-detail-val" id="weather-influence">--</span>
+          </div>
+        </div>
+        <div class="fc-detail-card">
+          <div class="fc-detail-icon">🗺️</div>
+          <div class="fc-detail-info">
+            <span class="fc-detail-label">Most Vulnerable Grid</span>
+            <span class="fc-detail-val" id="vulnerable-grid">--</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Grid Probabilities -->
+    <div class="grid-prob-section">
+      <h3>Grid-wise Probability Distribution</h3>
+      <div class="grid-prob-bars" id="grid-prob-bars"></div>
+    </div>
+
+    <!-- Environment Stats -->
+    <div class="env-stats-section" id="env-stats"></div>
+
+    <div class="forecast-actions">
+      <p class="email-notice">📧 Forecast report sent to your registered email</p>
+      <button class="btn-secondary" onclick="resetForecast()">New Forecast</button>
+    </div>
+  </div>
+</div>
+
+<script>
+let forecastGrid = 1;
+
+function selectForecastGrid(g) {
+  forecastGrid = g;
+  document.querySelectorAll('[id^="fc-grid-"]').forEach(c => c.classList.remove('selected'));
+  document.getElementById('fc-grid-' + g).classList.add('selected');
+}
+selectForecastGrid(1);
+
+function switchForecastMode(mode) {
+  document.getElementById('auto-mode').classList.toggle('hidden', mode !== 'auto');
+  document.getElementById('manual-mode').classList.toggle('hidden', mode !== 'manual');
+  document.getElementById('btn-auto').classList.toggle('active', mode === 'auto');
+  document.getElementById('btn-manual').classList.toggle('active', mode === 'manual');
+}
+
+async function runAutoForecast() {
+  const btn = document.getElementById('auto-forecast-btn');
+  document.getElementById('auto-btn-text').classList.add('hidden');
+  document.getElementById('auto-btn-loader').classList.remove('hidden');
+  btn.disabled = true;
+
+  try {
+    const resp = await fetch('/api/forecast_auto', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({grid_id: forecastGrid})
+    });
+    const data = await resp.json();
+    if (data.success) showForecastResult(data.result);
+    else alert('Forecast failed: ' + data.message);
+  } catch (e) {
+    alert('Error: ' + e.message);
+  } finally {
+    document.getElementById('auto-btn-text').classList.remove('hidden');
+    document.getElementById('auto-btn-loader').classList.add('hidden');
+    btn.disabled = false;
+  }
+}
+
+document.getElementById('manual-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const btn = e.target.querySelector('[type=submit]');
+  document.getElementById('manual-btn-text').classList.add('hidden');
+  document.getElementById('manual-btn-loader').classList.remove('hidden');
+  btn.disabled = true;
+
+  const formData = new FormData(e.target);
+  const payload = Object.fromEntries(formData.entries());
+
+  try {
+    const resp = await fetch('/api/forecast_manual', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload)
+    });
+    const data = await resp.json();
+    if (data.success) showForecastResult(data.result);
+    else alert('Forecast failed');
+  } catch (err) {
+    alert('Error: ' + err.message);
+  } finally {
+    document.getElementById('manual-btn-text').classList.remove('hidden');
+    document.getElementById('manual-btn-loader').classList.add('hidden');
+    btn.disabled = false;
+  }
+});
+
+function showForecastResult(result) {
+  document.getElementById('forecast-result').classList.remove('hidden');
+  document.getElementById('forecast-result').scrollIntoView({behavior: 'smooth'});
+
+  // Probability
+  const prob = result.probability;
+  document.getElementById('prob-display').textContent = prob + '%';
+
+  // Gauge
+  drawGauge(prob);
+
+  // Risk level
+  const riskEl = document.getElementById('risk-badge');
+  const riskText = document.getElementById('risk-level-text');
+  riskText.textContent = result.risk_level;
+  riskEl.className = 'risk-badge-large risk-' + result.risk_level.toLowerCase().replace(' ', '-');
+
+  // Details
+  document.getElementById('likely-time').textContent = result.likely_time;
+  document.getElementById('risk-trend').textContent = result.risk_trend;
+  document.getElementById('weather-influence').textContent = result.weather_influence;
+  document.getElementById('vulnerable-grid').textContent = 'Grid ' + result.most_vulnerable_grid;
+
+  // Grid bars
+  const barsEl = document.getElementById('grid-prob-bars');
+  barsEl.innerHTML = '';
+  const colors = {'1':'#22c55e','2':'#f59e0b','3':'#ef4444','4':'#8b5cf6'};
+  for (const [gid, prob] of Object.entries(result.grid_probabilities)) {
+    barsEl.innerHTML += `
+      <div class="prob-bar-item">
+        <span class="prob-bar-label">Grid ${gid}</span>
+        <div class="prob-bar-track">
+          <div class="prob-bar-fill" style="width:${prob}%; background:${colors[gid]}"></div>
+        </div>
+        <span class="prob-bar-val">${prob}%</span>
+      </div>`;
+  }
+
+  // Env stats
+  const env = result.weather || {};
+  document.getElementById('env-stats').innerHTML = `
+    <h3>Environmental Context</h3>
+    <div class="env-cards">
+      <div class="env-card"><span>🌡️</span><strong>${env.temperature_c || 'N/A'}°C</strong><span>Temperature</span></div>
+      <div class="env-card"><span>💧</span><strong>${env.humidity_percent || 'N/A'}%</strong><span>Humidity</span></div>
+      <div class="env-card"><span>🌧️</span><strong>${env.rainfall_mm || '0'} mm</strong><span>Rainfall</span></div>
+      <div class="env-card"><span>🌙</span><strong>${(result.moon_phase * 100).toFixed(0)}%</strong><span>Moon Phase</span></div>
+      <div class="env-card"><span>📊</span><strong>${result.intrusion_stats?.last_3_days || 0}</strong><span>Intrusions (3d)</span></div>
+      <div class="env-card"><span>📈</span><strong>${result.intrusion_stats?.last_7_days || 0}</strong><span>Intrusions (7d)</span></div>
+    </div>`;
+}
+
+function drawGauge(value) {
+  const canvas = document.getElementById('probability-gauge');
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, 240, 140);
+
+  const cx = 120, cy = 130, r = 100;
+  const startAngle = Math.PI, endAngle = 2 * Math.PI;
+
+  // Background arc
+  ctx.beginPath();
+  ctx.arc(cx, cy, r, startAngle, endAngle);
+  ctx.strokeStyle = 'rgba(255,255,255,0.1)';
+  ctx.lineWidth = 18;
+  ctx.lineCap = 'round';
+  ctx.stroke();
+
+  // Value arc
+  const color = value < 25 ? '#22c55e' : value < 50 ? '#f59e0b' : value < 75 ? '#ef4444' : '#7f1d1d';
+  const fillEnd = startAngle + (value / 100) * Math.PI;
+  ctx.beginPath();
+  ctx.arc(cx, cy, r, startAngle, fillEnd);
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 18;
+  ctx.lineCap = 'round';
+  ctx.stroke();
+}
+
+function resetForecast() {
+  document.getElementById('forecast-result').classList.add('hidden');
+  window.scrollTo({top: 0, behavior: 'smooth'});
+}
+</script>
+{% endblock %}

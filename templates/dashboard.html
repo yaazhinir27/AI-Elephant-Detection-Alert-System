@@ -1,0 +1,159 @@
+{% extends "base.html" %}
+{% block title %}Dashboard — ElephantGuard{% endblock %}
+
+{% block content %}
+<div class="page-container">
+  <!-- Page Header -->
+  <div class="page-header">
+    <div>
+      <h1 class="page-title">Guardian Dashboard</h1>
+      <p class="page-subtitle">Welcome back, <strong>{{ user.username }}</strong> · {{ user.location }}</p>
+    </div>
+    <div class="header-time" id="live-time"></div>
+  </div>
+
+  <!-- Stats Row -->
+  <div class="stats-grid">
+    <div class="stat-card" style="--accent: #22c55e;">
+      <div class="stat-icon">🔍</div>
+      <div class="stat-info">
+        <span class="stat-value">{{ total_detections }}</span>
+        <span class="stat-label">Total Detections</span>
+      </div>
+      <div class="stat-glow"></div>
+    </div>
+    <div class="stat-card" style="--accent: #ef4444;">
+      <div class="stat-icon">🐘</div>
+      <div class="stat-info">
+        <span class="stat-value">{{ elephant_detections }}</span>
+        <span class="stat-label">Elephant Events</span>
+      </div>
+      <div class="stat-glow"></div>
+    </div>
+    <div class="stat-card" style="--accent: #8b5cf6;">
+      <div class="stat-icon">🔮</div>
+      <div class="stat-info">
+        <span class="stat-value">{{ forecasts_count }}</span>
+        <span class="stat-label">Forecasts Run</span>
+      </div>
+      <div class="stat-glow"></div>
+    </div>
+    <div class="stat-card" style="--accent: #f59e0b;">
+      <div class="stat-icon">📍</div>
+      <div class="stat-info">
+        <span class="stat-value">4</span>
+        <span class="stat-label">Active Grids</span>
+      </div>
+      <div class="stat-glow"></div>
+    </div>
+  </div>
+
+  <!-- Quick Actions -->
+  <div class="section-title-wrap">
+    <h2 class="section-h2">Quick Actions</h2>
+  </div>
+  <div class="action-cards">
+    <a href="{{ url_for('detection') }}" class="action-card" style="--card-accent: #22c55e;">
+      <div class="action-icon">🎯</div>
+      <div class="action-content">
+        <h3>Start Detection</h3>
+        <p>Live webcam or video upload elephant detection with real-time YOLO AI</p>
+      </div>
+      <div class="action-arrow">→</div>
+    </a>
+    <a href="{{ url_for('forecasting') }}" class="action-card" style="--card-accent: #8b5cf6;">
+      <div class="action-icon">🔮</div>
+      <div class="action-content">
+        <h3>Run Forecast</h3>
+        <p>Predict intrusion probability using ML model with auto-collected features</p>
+      </div>
+      <div class="action-arrow">→</div>
+    </a>
+    <a href="{{ url_for('history') }}" class="action-card" style="--card-accent: #06b6d4;">
+      <div class="action-icon">📋</div>
+      <div class="action-content">
+        <h3>View History</h3>
+        <p>Browse all detection records, snapshots, and forecast analysis results</p>
+      </div>
+      <div class="action-arrow">→</div>
+    </a>
+  </div>
+
+  <!-- Recent Detections -->
+  <div class="section-title-wrap">
+    <h2 class="section-h2">Recent Detections</h2>
+    <a href="{{ url_for('history') }}" class="see-all-link">See all →</a>
+  </div>
+
+  {% if recent %}
+  <div class="recent-table-wrap">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Timestamp</th>
+          <th>Grid</th>
+          <th>Type</th>
+          <th>Status</th>
+          <th>Confidence</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for det in recent %}
+        <tr>
+          <td class="mono">{{ det.timestamp_ist }}</td>
+          <td><span class="grid-badge">Grid {{ det.grid_id }}</span></td>
+          <td><span class="type-badge {{ det.detection_type }}">{{ det.detection_type.upper() }}</span></td>
+          <td>
+            {% if det.elephant_count > 0 %}
+              <span class="status-badge danger">🐘 DETECTED</span>
+            {% else %}
+              <span class="status-badge safe">✓ Clear</span>
+            {% endif %}
+          </td>
+          <td class="mono">{{ det.confidence }}%</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state">
+    <span class="empty-icon">🌿</span>
+    <p>No detections yet. Start your first detection session!</p>
+    <a href="{{ url_for('detection') }}" class="btn-primary">Launch Detection →</a>
+  </div>
+  {% endif %}
+
+  <!-- Location Info -->
+  <div class="location-card">
+    <div class="location-info">
+      <h3>📍 Monitoring Location</h3>
+      <p class="location-name">{{ user.location }}</p>
+      {% if user.latitude and user.longitude %}
+      <p class="location-coords mono">{{ "%.4f"|format(user.latitude) }}, {{ "%.4f"|format(user.longitude) }}</p>
+      {% endif %}
+    </div>
+    <div class="location-grid-visual">
+      <div class="mini-grid">
+        <div class="mini-cell" data-grid="1">G1</div>
+        <div class="mini-cell" data-grid="2">G2</div>
+        <div class="mini-cell" data-grid="3">G3</div>
+        <div class="mini-cell" data-grid="4">G4</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// Live clock
+function updateTime() {
+  const el = document.getElementById('live-time');
+  if (el) {
+    const now = new Date();
+    el.innerHTML = `<span class="time-display">${now.toLocaleTimeString()}</span><span class="date-display">${now.toLocaleDateString('en-IN', {weekday:'long', year:'numeric', month:'long', day:'numeric'})}</span>`;
+  }
+}
+updateTime();
+setInterval(updateTime, 1000);
+</script>
+{% endblock %}
